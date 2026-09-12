@@ -45,18 +45,32 @@ def run_pipeline(start_phase=1):
     start_time = time.time()
     results = {}
 
-    # ─── Phase 2: Dataset Generation ─────────────────────────────
+    # ─── Phase 2: Dataset Loading (Olist Real Data) ──────────────────────
     if start_phase <= 2:
-        log_phase(2, "Dataset Generation")
+        log_phase(2, "Olist Dataset Loading & Transformation")
         try:
-            from src import data_generation
-            customers, transactions, engagement = data_generation.run()
+            from src import load_olist_data
+            customers, transactions, engagement = load_olist_data.run()
             results["customers"] = customers
             results["transactions"] = transactions
             results["engagement"] = engagement
-            log_phase(2, "Dataset Generation", "DONE")
+            log_phase(2, "Olist Dataset Loading & Transformation", "DONE")
+        except FileNotFoundError as e:
+            log_phase(2, "Olist Dataset Loading & Transformation", "ERROR")
+            print(f"  Error: {e}")
+            print("\n  ACTION REQUIRED: Download Olist dataset from Kaggle:")
+            print("  https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce")
+            print("\n  Extract files to: data/raw/olist_raw/")
+            print("  Required files:")
+            print("    - olist_customers_dataset.csv")
+            print("    - olist_orders_dataset.csv")
+            print("    - olist_order_items_dataset.csv")
+            print("    - olist_order_payments_dataset.csv")
+            print("    - olist_products_dataset.csv")
+            print("    - olist_product_category_name_translation.csv")
+            raise
         except Exception as e:
-            log_phase(2, "Dataset Generation", "ERROR")
+            log_phase(2, "Olist Dataset Loading & Transformation", "ERROR")
             print(f"  Error: {e}")
             raise
 
@@ -167,8 +181,8 @@ def run_pipeline(start_phase=1):
 
     # Summary of outputs
     print("\n  Generated Outputs:")
-    print(f"    data/raw/         → 3 synthetic datasets")
-    print(f"    data/processed/   → 5 processed datasets")
+    print(f"    data/raw/         → Olist transformed datasets (customers, transactions, engagement)")
+    print(f"    data/processed/   → 5 processed datasets with real-world features")
     print(f"    outputs/figures/  → Charts & visualizations")
     print(f"    outputs/models/   → Trained ML model + scaler")
     print(f"    outputs/powerbi/  → 4 Power BI-ready CSVs")
