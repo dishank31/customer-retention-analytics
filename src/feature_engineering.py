@@ -1,8 +1,9 @@
 """
-Phase 3 — Customer Feature Engineering
+Phase 2 — Customer Feature Engineering
 ========================================
 Transforms transaction-level data into one row per customer
 with RFM, behavioral, trend, and engagement features (~25 features).
+Designed to work with Olist real-world data.
 """
 
 import os
@@ -28,7 +29,9 @@ def compute_rfm(transactions, analysis_date=config.ANALYSIS_DATE):
         monetary=("revenue", "sum"),
     ).reset_index()
 
-    rfm["recency_days"] = (pd.Timestamp(analysis_date) - rfm["last_purchase_date"]).dt.days
+    rfm["recency_days"] = (
+        pd.Timestamp(analysis_date) - rfm["last_purchase_date"]
+    ).dt.days
     rfm.drop(columns=["last_purchase_date"], inplace=True)
 
     return rfm
@@ -56,13 +59,22 @@ def compute_purchase_behavior(transactions):
     ).reset_index()
     cust_orders["purchase_std"] = cust_orders["purchase_std"].fillna(0)
 
-    # Category diversity
+    # Category diversity (use product_category)
+    cat_col = "product_category"
     cat_diversity = txn_valid.groupby("customer_id").agg(
-        categories_purchased=("product_category", "nunique"),
+        categories_purchased=(cat_col, "nunique"),
     ).reset_index()
 
+    # Super-category diversity (if available)
+    if "product_super_category" in txn_valid.columns:
+        super_diversity = txn_valid.groupby("customer_id").agg(
+            super_categories_purchased=("product_super_category", "nunique"),
+        ).reset_index()
+    else:
+        super_diversity = None
+
     # Category concentration (Herfindahl index)
-    cat_spend = txn_valid.groupby(["customer_id", "product_category"])["revenue"].sum().reset_index()
+    cat_spend = txn_valid.groupby(["customer_id", cat_col])["revenue"].sum().reset_index()
     cat_total = cat_spend.groupby("customer_id")["revenue"].sum().reset_index()
     cat_total.columns = ["customer_id", "total_rev"]
     cat_spend = cat_spend.merge(cat_total, on="customer_id")
@@ -102,6 +114,9 @@ def compute_purchase_behavior(transactions):
     for df in [cat_diversity, hhi, discount_usage, return_rate, ipt]:
         behavior = behavior.merge(df, on="customer_id", how="left")
 
+    if super_diversity is not None:
+        behavior = behavior.merge(super_diversity, on="customer_id", how="left")
+
     return behavior
 
 
@@ -117,8 +132,8 @@ def compute_trend_features(transactions, analysis_date=config.ANALYSIS_DATE):
 
     recent = txn_valid[txn_valid["order_date"] >= recent_start]
     previous = txn_valid[
-        (txn_valid["order_date"] >= prev_start) &
-        (txn_valid["order_date"] < recent_start)
+        (txn_valid["order_date"] >= prev_start)
+        & (txn_valid["order_date"] < recent_start)
     ]
 
     # Recent window aggregates
@@ -146,7 +161,7 @@ def compute_trend_features(transactions, analysis_date=config.ANALYSIS_DATE):
         return np.where(
             trends[prev_col] > 0,
             (trends[recent_col] - trends[prev_col]) / trends[prev_col],
-            np.where(trends[recent_col] > 0, 1.0, 0.0)
+            np.where(trends[recent_col] > 0, 1.0, 0.0),
         )
 
     trends["spending_trend"] = safe_trend("recent_spend", "prev_spend")
@@ -166,15 +181,16 @@ def compute_engagement_score(engagement):
 
     # Normalize each metric to 0-1 range
     for col, weight in config.ENGAGEMENT_WEIGHTS.items():
-        col_max = eng[col].max()
-        if col_max > 0:
-            eng[f"{col}_norm"] = eng[col] / col_max
-        else:
-            eng[f"{col}_norm"] = 0
+        if col in eng.columns:
+            col_max = eng[col].max()
+            if col_max > 0:
+                eng[f"{col}_norm"] = eng[col] / col_max
+            else:
+                eng[f"{col}_norm"] = 0
 
     # Weighted composite score (0-100)
     eng["engagement_score"] = sum(
-        eng[f"{col}_norm"] * weight * 100
+        eng.get(f"{col}_norm", 0) * weight * 100
         for col, weight in config.ENGAGEMENT_WEIGHTS.items()
     )
     eng["engagement_score"] = eng["engagement_score"].round(2)
@@ -184,9 +200,9 @@ def compute_engagement_score(engagement):
 
 def run(customers=None, transactions=None, engagement=None):
     """Run full feature engineering pipeline."""
-    print("\n" + "="*60)
-    print("PHASE 3: Feature Engineering")
-    print("="*60)
+    print("\n" + "=" * 60)
+    print("PHASE 2: Feature Engineering")
+    print("=" * 60)
 
     # Load data if not passed
     if customers is None:
@@ -211,8 +227,9 @@ def run(customers=None, transactions=None, engagement=None):
 
     # Merge everything into customer master
     print("  Assembling customer feature matrix...")
-    customer_features = customers[["customer_id", "age", "gender", "region",
-                                     "signup_date", "acquisition_channel"]].copy()
+    customer_features = customers[
+        ["customer_id", "age", "gender", "region", "signup_date", "acquisition_channel"]
+    ].copy()
 
     # Customer tenure
     customer_features["signup_date"] = pd.to_datetime(customer_features["signup_date"])
@@ -225,12 +242,27 @@ def run(customers=None, transactions=None, engagement=None):
         customer_features = customer_features.merge(df, on="customer_id", how="left")
 
     # Merge engagement raw + loyalty
-    eng_cols = ["customer_id", "emails_opened_30d", "website_visits_30d",
-                "campaign_clicks_30d", "app_sessions_30d", "support_tickets",
-                "loyalty_program"]
+    eng_cols = [
+        "customer_id",
+        "emails_opened_30d",
+        "website_visits_30d",
+        "campaign_clicks_30d",
+        "app_sessions_30d",
+        "support_tickets",
+        "loyalty_program",
+    ]
+    available_eng_cols = [c for c in eng_cols if c in engagement.columns]
     customer_features = customer_features.merge(
-        engagement[eng_cols], on="customer_id", how="left"
+        engagement[available_eng_cols], on="customer_id", how="left"
     )
+
+    # Merge review data if available
+    if "avg_review_score" in engagement.columns:
+        customer_features = customer_features.merge(
+            engagement[["customer_id", "avg_review_score", "review_count"]],
+            on="customer_id",
+            how="left",
+        )
 
     # Fill NaN for customers with no transactions in certain windows
     numeric_cols = customer_features.select_dtypes(include=[np.number]).columns
@@ -239,8 +271,10 @@ def run(customers=None, transactions=None, engagement=None):
     # Save
     out_path = os.path.join(config.DATA_PROCESSED, "customer_features.csv")
     customer_features.to_csv(out_path, index=False)
-    print(f"\n  ✓ Customer features: {len(customer_features)} rows, "
-          f"{len(customer_features.columns)} columns → {out_path}")
+    print(
+        f"\n  ✓ Customer features: {len(customer_features):,} rows, "
+        f"{len(customer_features.columns)} columns → {out_path}"
+    )
 
     return customer_features
 

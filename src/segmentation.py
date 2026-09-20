@@ -1,8 +1,9 @@
 """
-Phase 4 — Customer Segmentation
+Phase 3 — Customer Segmentation
 ================================
 Dual approach: Rule-based RFM segmentation (Approach A)
 and K-Means clustering (Approach B), with comparison analysis.
+Handles Olist's skewed data (many one-time buyers).
 """
 
 import os
@@ -25,17 +26,42 @@ import config
 # ─── Approach A: Rule-Based RFM ─────────────────────────────────────────
 
 def rfm_score(customer_features):
-    """Assign RFM scores (1-5) using quintiles and map to segments."""
+    """
+    Assign RFM scores (1-5) using quintiles and map to segments.
+    Handles edge cases with heavily skewed Olist data.
+    """
     df = customer_features.copy()
 
     # Recency: lower is better → invert scoring
-    df["r_score"] = pd.qcut(df["recency_days"], q=5, labels=[5, 4, 3, 2, 1]).astype(int)
+    # Use rank-based qcut to handle ties in skewed data
+    try:
+        df["r_score"] = pd.qcut(
+            df["recency_days"].rank(method="first"), q=5, labels=[5, 4, 3, 2, 1]
+        ).astype(int)
+    except ValueError:
+        df["r_score"] = pd.cut(
+            df["recency_days"], bins=5, labels=[5, 4, 3, 2, 1]
+        ).astype(int)
 
     # Frequency: higher is better
-    df["f_score"] = pd.qcut(df["frequency"].rank(method="first"), q=5, labels=[1, 2, 3, 4, 5]).astype(int)
+    try:
+        df["f_score"] = pd.qcut(
+            df["frequency"].rank(method="first"), q=5, labels=[1, 2, 3, 4, 5]
+        ).astype(int)
+    except ValueError:
+        df["f_score"] = pd.cut(
+            df["frequency"], bins=5, labels=[1, 2, 3, 4, 5]
+        ).astype(int)
 
     # Monetary: higher is better
-    df["m_score"] = pd.qcut(df["monetary"].rank(method="first"), q=5, labels=[1, 2, 3, 4, 5]).astype(int)
+    try:
+        df["m_score"] = pd.qcut(
+            df["monetary"].rank(method="first"), q=5, labels=[1, 2, 3, 4, 5]
+        ).astype(int)
+    except ValueError:
+        df["m_score"] = pd.cut(
+            df["monetary"], bins=5, labels=[1, 2, 3, 4, 5]
+        ).astype(int)
 
     # Combined RFM score
     df["rfm_score"] = df["r_score"] + df["f_score"] + df["m_score"]
@@ -75,8 +101,10 @@ def kmeans_segmentation(customer_features):
     df = customer_features.copy()
 
     # Features for clustering
-    cluster_features = ["recency_days", "frequency", "monetary",
-                        "engagement_score", "avg_order_value"]
+    cluster_features = [
+        "recency_days", "frequency", "monetary",
+        "engagement_score", "avg_order_value",
+    ]
     X = df[cluster_features].copy()
     X = X.fillna(0)
 
@@ -93,7 +121,7 @@ def kmeans_segmentation(customer_features):
         km = KMeans(n_clusters=k, random_state=config.RANDOM_SEED, n_init=10)
         labels = km.fit_predict(X_scaled)
         inertias.append(km.inertia_)
-        silhouettes.append(silhouette_score(X_scaled, labels))
+        silhouettes.append(silhouette_score(X_scaled, labels, sample_size=min(10000, len(X_scaled))))
 
     # Plot elbow and silhouette
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
@@ -111,8 +139,10 @@ def kmeans_segmentation(customer_features):
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(config.OUTPUT_FIGURES, "clustering_evaluation.png"),
-                dpi=150, bbox_inches="tight")
+    plt.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "clustering_evaluation.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close()
 
     # Select optimal k (best silhouette)
@@ -129,27 +159,30 @@ def kmeans_segmentation(customer_features):
     print(cluster_profiles.round(1).to_string(index=True))
 
     # Assign names based on profiles
-    df["kmeans_segment"] = df["cluster"].map(
-        _name_clusters(cluster_profiles)
-    )
+    df["kmeans_segment"] = df["cluster"].map(_name_clusters(cluster_profiles))
 
-    # PCA visualization
+    # PCA visualization (subsample for large datasets)
+    sample_size = min(10000, len(X_scaled))
+    sample_idx = np.random.choice(len(X_scaled), sample_size, replace=False)
+
     pca = PCA(n_components=2)
-    X_pca = pca.fit_transform(X_scaled)
-    df["pca_1"] = X_pca[:, 0]
-    df["pca_2"] = X_pca[:, 1]
+    X_pca = pca.fit_transform(X_scaled[sample_idx])
 
     fig, ax = plt.subplots(figsize=(10, 7))
-    scatter = ax.scatter(df["pca_1"], df["pca_2"],
-                         c=df["cluster"], cmap="viridis",
-                         alpha=0.5, s=10)
+    scatter = ax.scatter(
+        X_pca[:, 0], X_pca[:, 1],
+        c=df.iloc[sample_idx]["cluster"].values,
+        cmap="viridis", alpha=0.5, s=10,
+    )
     ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)")
     ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)")
     ax.set_title("Customer Clusters (PCA Projection)")
     plt.colorbar(scatter, label="Cluster")
     plt.tight_layout()
-    plt.savefig(os.path.join(config.OUTPUT_FIGURES, "cluster_pca.png"),
-                dpi=150, bbox_inches="tight")
+    plt.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "cluster_pca.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close()
 
     return df, optimal_k
@@ -198,8 +231,10 @@ def compare_approaches(df):
     print("\n  Comparing RFM vs K-Means segmentation...")
 
     # Cross-tabulation
-    cross_tab = pd.crosstab(df["rfm_segment"], df["kmeans_segment"],
-                            margins=True, margins_name="Total")
+    cross_tab = pd.crosstab(
+        df["rfm_segment"], df["kmeans_segment"],
+        margins=True, margins_name="Total",
+    )
 
     # Adjusted Rand Index
     ari = adjusted_rand_score(df["rfm_segment"], df["kmeans_segment"])
@@ -209,18 +244,26 @@ def compare_approaches(df):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
     rfm_counts = df["rfm_segment"].value_counts()
-    rfm_counts.plot(kind="barh", ax=ax1, color=sns.color_palette("viridis", len(rfm_counts)))
+    rfm_counts.plot(
+        kind="barh", ax=ax1,
+        color=sns.color_palette("viridis", len(rfm_counts)),
+    )
     ax1.set_title("RFM Segments (Rule-Based)")
     ax1.set_xlabel("Customer Count")
 
     km_counts = df["kmeans_segment"].value_counts()
-    km_counts.plot(kind="barh", ax=ax2, color=sns.color_palette("magma", len(km_counts)))
+    km_counts.plot(
+        kind="barh", ax=ax2,
+        color=sns.color_palette("magma", len(km_counts)),
+    )
     ax2.set_title("K-Means Segments")
     ax2.set_xlabel("Customer Count")
 
     plt.tight_layout()
-    plt.savefig(os.path.join(config.OUTPUT_FIGURES, "segmentation_comparison.png"),
-                dpi=150, bbox_inches="tight")
+    plt.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "segmentation_comparison.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close()
 
     return cross_tab, ari
@@ -229,7 +272,7 @@ def compare_approaches(df):
 # ─── Segment Profile Visualization ──────────────────────────────────────
 
 def plot_segment_profiles(df):
-    """Create radar charts and summary plots for segments."""
+    """Create summary plots for segments."""
 
     # Revenue by RFM segment
     seg_summary = df.groupby("rfm_segment").agg(
@@ -269,8 +312,10 @@ def plot_segment_profiles(df):
     axes[1, 1].set_xlabel("Engagement Score")
 
     plt.tight_layout()
-    plt.savefig(os.path.join(config.OUTPUT_FIGURES, "segment_profiles.png"),
-                dpi=150, bbox_inches="tight")
+    plt.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "segment_profiles.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close()
 
     return seg_summary
@@ -278,9 +323,9 @@ def plot_segment_profiles(df):
 
 def run(customer_features=None):
     """Run full segmentation pipeline."""
-    print("\n" + "="*60)
-    print("PHASE 4: Customer Segmentation")
-    print("="*60)
+    print("\n" + "=" * 60)
+    print("PHASE 3: Customer Segmentation")
+    print("=" * 60)
 
     if customer_features is None:
         customer_features = pd.read_csv(

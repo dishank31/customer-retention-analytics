@@ -1,9 +1,11 @@
 """
-Phase 6 — Churn Prediction
+Phase 5 — Churn Prediction
 ============================
 Builds 4 ML models (Logistic Regression, Decision Tree, Random Forest, XGBoost)
 with temporal train/test split, SMOTE for class imbalance, SHAP explainability,
 and comprehensive evaluation.
+
+Adapted for Olist's high one-time-buyer rate.
 """
 
 import os
@@ -20,7 +22,7 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, average_precision_score, confusion_matrix,
-    roc_curve, precision_recall_curve, classification_report
+    roc_curve, precision_recall_curve, classification_report,
 )
 from imblearn.over_sampling import SMOTE
 import matplotlib
@@ -52,8 +54,11 @@ except ImportError:
 
 # ─── Churn Label Creation ───────────────────────────────────────────────
 
-def create_churn_labels(transactions, analysis_date=config.ANALYSIS_DATE,
-                         churn_window=config.CHURN_WINDOW_DAYS):
+def create_churn_labels(
+    transactions,
+    analysis_date=config.ANALYSIS_DATE,
+    churn_window=config.CHURN_WINDOW_DAYS,
+):
     """
     Define churn using a temporal observation/prediction split.
 
@@ -71,19 +76,27 @@ def create_churn_labels(transactions, analysis_date=config.ANALYSIS_DATE,
 
     # Customers who purchased in the prediction window
     pred_window = txn[
-        (txn["order_date"] >= split_date) &
-        (txn["order_date"] <= pd.Timestamp(analysis_date))
+        (txn["order_date"] >= split_date)
+        & (txn["order_date"] <= pd.Timestamp(analysis_date))
     ]["customer_id"].unique()
 
     # Churn labels
-    churn_labels = pd.DataFrame({
-        "customer_id": obs_customers,
-        "churn": [0 if cid in pred_window else 1 for cid in obs_customers]
-    })
+    churn_labels = pd.DataFrame(
+        {
+            "customer_id": obs_customers,
+            "churn": [0 if cid in set(pred_window) else 1 for cid in obs_customers],
+        }
+    )
 
     churn_rate = churn_labels["churn"].mean()
-    print(f"  Churn definition: no purchase within {churn_window} days after {split_date.date()}")
-    print(f"  Churn rate: {churn_rate:.1%} ({churn_labels['churn'].sum()} / {len(churn_labels)})")
+    print(
+        f"  Churn definition: no purchase within {churn_window} days "
+        f"after {split_date.date()}"
+    )
+    print(
+        f"  Churn rate: {churn_rate:.1%} "
+        f"({churn_labels['churn'].sum():,} / {len(churn_labels):,})"
+    )
 
     return churn_labels
 
@@ -143,7 +156,7 @@ def train_models(X_train, y_train):
     # 3. Random Forest
     models["Random Forest"] = RandomForestClassifier(
         n_estimators=200, max_depth=12, random_state=config.RANDOM_SEED,
-        class_weight="balanced", n_jobs=-1
+        class_weight="balanced", n_jobs=-1,
     )
 
     # 4. XGBoost or GradientBoosting
@@ -156,12 +169,12 @@ def train_models(X_train, y_train):
             n_estimators=200, max_depth=6, learning_rate=0.1,
             scale_pos_weight=scale_weight,
             random_state=config.RANDOM_SEED, eval_metric="logloss",
-            verbosity=0
+            verbosity=0,
         )
     else:
         models["Gradient Boosting"] = GradientBoostingClassifier(
             n_estimators=200, max_depth=6, learning_rate=0.1,
-            random_state=config.RANDOM_SEED
+            random_state=config.RANDOM_SEED,
         )
 
     # Train all
@@ -199,33 +212,44 @@ def evaluate_models(models, X_test, y_test, feature_names):
         }
 
         print(f"\n  {name}:")
-        print(f"    Accuracy: {acc:.3f}  Precision: {prec:.3f}  "
-              f"Recall: {rec:.3f}  F1: {f1:.3f}")
+        print(
+            f"    Accuracy: {acc:.3f}  Precision: {prec:.3f}  "
+            f"Recall: {rec:.3f}  F1: {f1:.3f}"
+        )
         print(f"    AUC-ROC: {auc_roc:.3f}  AUC-PR: {auc_pr:.3f}")
 
         # ROC curve
         fpr, tpr, _ = roc_curve(y_test, y_prob)
-        ax_roc.plot(fpr, tpr, color=colors[i], linewidth=2,
-                     label=f"{name} (AUC={auc_roc:.3f})")
+        ax_roc.plot(
+            fpr, tpr, color=colors[i], linewidth=2,
+            label=f"{name} (AUC={auc_roc:.3f})",
+        )
 
         # PR curve
         precision_vals, recall_vals, _ = precision_recall_curve(y_test, y_prob)
-        ax_pr.plot(recall_vals, precision_vals, color=colors[i], linewidth=2,
-                    label=f"{name} (AP={auc_pr:.3f})")
+        ax_pr.plot(
+            recall_vals, precision_vals, color=colors[i], linewidth=2,
+            label=f"{name} (AP={auc_pr:.3f})",
+        )
 
         # Confusion matrix
         fig_cm, ax_cm = plt.subplots(figsize=(6, 5))
         cm = confusion_matrix(y_test, y_pred)
-        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax_cm,
-                     xticklabels=["No Churn", "Churn"],
-                     yticklabels=["No Churn", "Churn"])
+        sns.heatmap(
+            cm, annot=True, fmt="d", cmap="Blues", ax=ax_cm,
+            xticklabels=["No Churn", "Churn"],
+            yticklabels=["No Churn", "Churn"],
+        )
         ax_cm.set_title(f"Confusion Matrix — {name}")
         ax_cm.set_xlabel("Predicted")
         ax_cm.set_ylabel("Actual")
         plt.tight_layout()
         fig_cm.savefig(
-            os.path.join(config.OUTPUT_FIGURES, f"confusion_matrix_{name.lower().replace(' ', '_')}.png"),
-            dpi=150, bbox_inches="tight"
+            os.path.join(
+                config.OUTPUT_FIGURES,
+                f"confusion_matrix_{name.lower().replace(' ', '_')}.png",
+            ),
+            dpi=150, bbox_inches="tight",
         )
         plt.close(fig_cm)
 
@@ -237,8 +261,10 @@ def evaluate_models(models, X_test, y_test, feature_names):
     ax_roc.legend(loc="lower right")
     ax_roc.grid(True, alpha=0.3)
     fig_roc.tight_layout()
-    fig_roc.savefig(os.path.join(config.OUTPUT_FIGURES, "roc_comparison.png"),
-                     dpi=150, bbox_inches="tight")
+    fig_roc.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "roc_comparison.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close(fig_roc)
 
     # Finalize PR plot
@@ -248,8 +274,10 @@ def evaluate_models(models, X_test, y_test, feature_names):
     ax_pr.legend(loc="upper right")
     ax_pr.grid(True, alpha=0.3)
     fig_pr.tight_layout()
-    fig_pr.savefig(os.path.join(config.OUTPUT_FIGURES, "pr_comparison.png"),
-                    dpi=150, bbox_inches="tight")
+    fig_pr.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "pr_comparison.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close(fig_pr)
 
     return results
@@ -259,8 +287,9 @@ def plot_feature_importance(models, feature_names):
     """Plot feature importance for tree-based models."""
     fig, axes = plt.subplots(1, 2, figsize=(18, 8))
 
-    for idx, name in enumerate(["Random Forest",
-                                 "XGBoost" if HAS_XGBOOST else "Gradient Boosting"]):
+    for idx, name in enumerate(
+        ["Random Forest", "XGBoost" if HAS_XGBOOST else "Gradient Boosting"]
+    ):
         if name not in models:
             continue
         model = models[name]
@@ -270,14 +299,16 @@ def plot_feature_importance(models, feature_names):
         axes[idx].barh(
             [feature_names[i] for i in sorted_idx],
             importances[sorted_idx],
-            color=sns.color_palette("viridis", len(sorted_idx))
+            color=sns.color_palette("viridis", len(sorted_idx)),
         )
         axes[idx].set_title(f"Top 15 Features — {name}")
         axes[idx].set_xlabel("Importance")
 
     plt.tight_layout()
-    plt.savefig(os.path.join(config.OUTPUT_FIGURES, "feature_importance.png"),
-                dpi=150, bbox_inches="tight")
+    plt.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "feature_importance.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close()
 
 
@@ -289,14 +320,18 @@ def shap_analysis(best_model, X_test, feature_names, model_name):
 
     print(f"\n  Running SHAP analysis on {model_name}...")
 
+    # Subsample for large datasets
+    sample_size = min(1000, len(X_test))
+    X_sample = X_test.sample(sample_size, random_state=config.RANDOM_SEED)
+
     # Use TreeExplainer for tree-based models
     try:
         explainer = shap.TreeExplainer(best_model)
-        shap_values = explainer.shap_values(X_test)
+        shap_values = explainer.shap_values(X_sample)
     except Exception:
         try:
-            explainer = shap.Explainer(best_model, X_test)
-            shap_values = explainer(X_test).values
+            explainer = shap.Explainer(best_model, X_sample)
+            shap_values = explainer(X_sample).values
         except Exception as e:
             print(f"  ⚠ SHAP analysis failed: {e}")
             return
@@ -307,22 +342,30 @@ def shap_analysis(best_model, X_test, feature_names, model_name):
 
     # Summary plot
     fig, ax = plt.subplots(figsize=(12, 8))
-    shap.summary_plot(shap_values, X_test, feature_names=feature_names,
-                       show=False, max_display=15)
+    shap.summary_plot(
+        shap_values, X_sample, feature_names=feature_names,
+        show=False, max_display=15,
+    )
     plt.title(f"SHAP Feature Importance — {model_name}")
     plt.tight_layout()
-    plt.savefig(os.path.join(config.OUTPUT_FIGURES, "shap_summary.png"),
-                dpi=150, bbox_inches="tight")
+    plt.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "shap_summary.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close()
 
     # Bar plot
     fig, ax = plt.subplots(figsize=(10, 7))
-    shap.summary_plot(shap_values, X_test, feature_names=feature_names,
-                       plot_type="bar", show=False, max_display=15)
+    shap.summary_plot(
+        shap_values, X_sample, feature_names=feature_names,
+        plot_type="bar", show=False, max_display=15,
+    )
     plt.title(f"SHAP Mean Absolute Impact — {model_name}")
     plt.tight_layout()
-    plt.savefig(os.path.join(config.OUTPUT_FIGURES, "shap_bar.png"),
-                dpi=150, bbox_inches="tight")
+    plt.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "shap_bar.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close()
 
     print("  ✓ SHAP plots saved")
@@ -332,9 +375,9 @@ def shap_analysis(best_model, X_test, feature_names, model_name):
 
 def run(customer_data=None, transactions=None):
     """Run the full churn prediction pipeline."""
-    print("\n" + "="*60)
-    print("PHASE 6: Churn Prediction")
-    print("="*60)
+    print("\n" + "=" * 60)
+    print("PHASE 5: Churn Prediction")
+    print("=" * 60)
 
     if transactions is None:
         transactions = pd.read_csv(os.path.join(config.DATA_RAW, "transactions.csv"))
@@ -350,29 +393,36 @@ def run(customer_data=None, transactions=None):
     # 2. Prepare features
     print("\n  Preparing features...")
     X, y, feature_names, full_df = prepare_features(customer_data, churn_labels)
-    print(f"  Features: {len(feature_names)}, Samples: {len(X)}")
+    print(f"  Features: {len(feature_names)}, Samples: {len(X):,}")
 
     # 3. Train/test split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=config.TEST_SIZE,
-        random_state=config.RANDOM_SEED, stratify=y
+        random_state=config.RANDOM_SEED, stratify=y,
     )
-    print(f"  Train: {len(X_train)} | Test: {len(X_test)}")
-    print(f"  Train churn rate: {y_train.mean():.1%} | Test churn rate: {y_test.mean():.1%}")
+    print(f"  Train: {len(X_train):,} | Test: {len(X_test):,}")
+    print(
+        f"  Train churn rate: {y_train.mean():.1%} | "
+        f"Test churn rate: {y_test.mean():.1%}"
+    )
 
     # 4. SMOTE on training data
     print("\n  Applying SMOTE...")
     smote = SMOTE(random_state=config.RANDOM_SEED)
     X_train_sm, y_train_sm = smote.fit_resample(X_train, y_train)
-    print(f"  After SMOTE — Train: {len(X_train_sm)} "
-          f"(Churn: {y_train_sm.sum()}, No Churn: {(y_train_sm == 0).sum()})")
+    print(
+        f"  After SMOTE — Train: {len(X_train_sm):,} "
+        f"(Churn: {y_train_sm.sum():,}, No Churn: {(y_train_sm == 0).sum():,})"
+    )
 
     # 5. Scale features
     scaler = StandardScaler()
-    X_train_scaled = pd.DataFrame(scaler.fit_transform(X_train_sm),
-                                   columns=feature_names)
-    X_test_scaled = pd.DataFrame(scaler.transform(X_test),
-                                  columns=feature_names)
+    X_train_scaled = pd.DataFrame(
+        scaler.fit_transform(X_train_sm), columns=feature_names
+    )
+    X_test_scaled = pd.DataFrame(
+        scaler.transform(X_test), columns=feature_names
+    )
 
     # 6. Train models
     print("\n  Training models...")
@@ -394,7 +444,10 @@ def run(customer_data=None, transactions=None):
     # 9. Select best model (by AUC-ROC)
     best_name = max(results, key=lambda k: results[k]["AUC-ROC"])
     best_model = models[best_name]
-    print(f"\n  ★ Best model: {best_name} (AUC-ROC = {results[best_name]['AUC-ROC']:.3f})")
+    print(
+        f"\n  ★ Best model: {best_name} "
+        f"(AUC-ROC = {results[best_name]['AUC-ROC']:.3f})"
+    )
 
     # 10. SHAP analysis on best model
     shap_analysis(best_model, X_test_scaled, feature_names, best_name)
@@ -405,17 +458,22 @@ def run(customer_data=None, transactions=None):
     X_all_scaled = pd.DataFrame(scaler.transform(X_all), columns=feature_names)
     churn_probs = best_model.predict_proba(X_all_scaled)[:, 1]
 
+    customer_data = customer_data.copy()
     customer_data["churn_prob"] = churn_probs
     customer_data["churn_predicted"] = (churn_probs >= 0.5).astype(int)
 
     # Merge actual churn labels for customers that have them
-    customer_data = customer_data.merge(
-        churn_labels, on="customer_id", how="left"
-    )
+    customer_data = customer_data.merge(churn_labels, on="customer_id", how="left")
     customer_data.rename(columns={"churn": "churn_actual"}, inplace=True)
 
     # 12. Save model and scaler
-    joblib.dump(best_model, os.path.join(config.OUTPUT_MODELS, f"best_model_{best_name.lower().replace(' ', '_')}.pkl"))
+    joblib.dump(
+        best_model,
+        os.path.join(
+            config.OUTPUT_MODELS,
+            f"best_model_{best_name.lower().replace(' ', '_')}.pkl",
+        ),
+    )
     joblib.dump(scaler, os.path.join(config.OUTPUT_MODELS, "feature_scaler.pkl"))
 
     # Save results
@@ -423,16 +481,23 @@ def run(customer_data=None, transactions=None):
 
     # Churn probability distribution plot
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.hist(customer_data["churn_prob"], bins=50, color="#e74c3c",
-            edgecolor="white", alpha=0.8)
-    ax.axvline(0.5, color="black", linestyle="--", linewidth=1.5, label="Threshold (0.5)")
+    ax.hist(
+        customer_data["churn_prob"], bins=50, color="#e74c3c",
+        edgecolor="white", alpha=0.8,
+    )
+    ax.axvline(
+        0.5, color="black", linestyle="--", linewidth=1.5,
+        label="Threshold (0.5)",
+    )
     ax.set_title("Churn Probability Distribution")
     ax.set_xlabel("Churn Probability")
     ax.set_ylabel("Customer Count")
     ax.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(config.OUTPUT_FIGURES, "churn_probability_dist.png"),
-                dpi=150, bbox_inches="tight")
+    plt.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "churn_probability_dist.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close()
 
     # Save updated customer data

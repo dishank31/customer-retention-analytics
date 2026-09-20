@@ -1,5 +1,5 @@
 """
-Phase 7 — Retention Prioritization
+Phase 6 — Retention Prioritization
 ====================================
 The centerpiece: combines customer value, churn risk, and intervention
 economics into a transparent Retention Priority Score with sensitivity
@@ -63,17 +63,19 @@ def compute_retention_economics(df):
 
     weights = config.PRIORITY_WEIGHTS
     df["retention_priority_score"] = (
-        weights["value"] * norm_profit +
-        weights["churn_risk"] * norm_churn +
-        weights["net_benefit"] * norm_benefit
+        weights["value"] * norm_profit
+        + weights["churn_risk"] * norm_churn
+        + weights["net_benefit"] * norm_benefit
     ) * 100
 
     df["retention_priority_score"] = df["retention_priority_score"].round(1)
 
     # ── Priority Rank ──────────────────────────────────────────────
-    df["priority_rank"] = df["retention_priority_score"].rank(
-        ascending=False, method="min"
-    ).astype(int)
+    df["priority_rank"] = (
+        df["retention_priority_score"]
+        .rank(ascending=False, method="min")
+        .astype(int)
+    )
 
     # ── Recommended Action ─────────────────────────────────────────
     df["recommended_action"] = df.apply(_recommend_action, axis=1)
@@ -134,9 +136,9 @@ def sensitivity_analysis(df):
 
     for config_name, weights in weight_configs.items():
         score = (
-            weights["value"] * norm_profit +
-            weights["churn_risk"] * norm_churn +
-            weights["net_benefit"] * norm_benefit
+            weights["value"] * norm_profit
+            + weights["churn_risk"] * norm_churn
+            + weights["net_benefit"] * norm_benefit
         ) * 100
 
         top_20 = df.loc[score.nlargest(20).index, "customer_id"].tolist()
@@ -152,7 +154,7 @@ def sensitivity_analysis(df):
         if name == "Default (40/35/25)":
             continue
         overlap = len(default_top & top_set)
-        print(f"    {name}: {overlap}/20 overlap ({overlap/20:.0%})")
+        print(f"    {name}: {overlap}/20 overlap ({overlap / 20:.0%})")
 
     return weight_configs
 
@@ -165,7 +167,7 @@ def create_decision_matrix(df):
         df["churn_prob"],
         bins=[0, 0.3, 0.6, 1.0],
         labels=["Low Risk", "Medium Risk", "High Risk"],
-        include_lowest=True
+        include_lowest=True,
     )
 
     matrix = df.groupby(["value_tier", "risk_tier"]).agg(
@@ -192,18 +194,22 @@ def plot_retention_analysis(df):
     fig, axes = plt.subplots(2, 2, figsize=(18, 14))
 
     # 1. Priority score distribution
-    axes[0, 0].hist(df["retention_priority_score"], bins=50, color="#e74c3c",
-                     edgecolor="white", alpha=0.8)
+    axes[0, 0].hist(
+        df["retention_priority_score"], bins=50, color="#e74c3c",
+        edgecolor="white", alpha=0.8,
+    )
     axes[0, 0].set_title("Retention Priority Score Distribution")
     axes[0, 0].set_xlabel("Priority Score")
     axes[0, 0].set_ylabel("Count")
 
-    # 2. Profit vs Churn (bubble = priority)
+    # 2. Profit vs Churn (subsample for performance)
+    sample_size = min(5000, len(df))
+    sample = df.sample(sample_size, random_state=config.RANDOM_SEED)
     scatter = axes[0, 1].scatter(
-        df["churn_prob"], df["customer_profit"],
-        s=df["retention_priority_score"] * 0.5,
-        c=df["retention_priority_score"],
-        cmap="RdYlGn_r", alpha=0.5, edgecolors="none"
+        sample["churn_prob"], sample["customer_profit"],
+        s=sample["retention_priority_score"] * 0.5,
+        c=sample["retention_priority_score"],
+        cmap="RdYlGn_r", alpha=0.5, edgecolors="none",
     )
     axes[0, 1].set_title("Customer Profit vs Churn Probability")
     axes[0, 1].set_xlabel("Churn Probability")
@@ -211,7 +217,9 @@ def plot_retention_analysis(df):
     plt.colorbar(scatter, ax=axes[0, 1], label="Priority Score")
 
     # 3. Expected net benefit by segment
-    seg_benefit = df.groupby("rfm_segment")["expected_net_benefit"].mean().sort_values()
+    seg_benefit = (
+        df.groupby("rfm_segment")["expected_net_benefit"].mean().sort_values()
+    )
     colors = ["#e74c3c" if v < 0 else "#2ecc71" for v in seg_benefit.values]
     axes[1, 0].barh(seg_benefit.index, seg_benefit.values, color=colors)
     axes[1, 0].set_title("Avg Expected Net Benefit by Segment")
@@ -220,14 +228,18 @@ def plot_retention_analysis(df):
 
     # 4. Recommended action distribution
     action_counts = df["recommended_action"].value_counts()
-    action_counts.plot(kind="barh", ax=axes[1, 1],
-                        color=sns.color_palette("viridis", len(action_counts)))
+    action_counts.plot(
+        kind="barh", ax=axes[1, 1],
+        color=sns.color_palette("viridis", len(action_counts)),
+    )
     axes[1, 1].set_title("Recommended Actions Distribution")
     axes[1, 1].set_xlabel("Customer Count")
 
     plt.tight_layout()
-    plt.savefig(os.path.join(config.OUTPUT_FIGURES, "retention_prioritization.png"),
-                dpi=150, bbox_inches="tight")
+    plt.savefig(
+        os.path.join(config.OUTPUT_FIGURES, "retention_prioritization.png"),
+        dpi=150, bbox_inches="tight",
+    )
     plt.close()
 
 
@@ -238,14 +250,17 @@ def generate_top_targets_report(df, top_n=20):
     report_cols = [
         "priority_rank", "customer_id", "customer_profit", "churn_prob",
         "expected_retention_value", "intervention_cost", "expected_net_benefit",
-        "retention_priority_score", "rfm_segment", "value_tier", "recommended_action"
+        "retention_priority_score", "rfm_segment", "value_tier", "recommended_action",
     ]
 
-    report = top[report_cols].copy()
-    report["customer_profit"] = report["customer_profit"].round(0)
-    report["expected_retention_value"] = report["expected_retention_value"].round(0)
-    report["expected_net_benefit"] = report["expected_net_benefit"].round(0)
-    report["churn_prob"] = report["churn_prob"].round(2)
+    available = [c for c in report_cols if c in top.columns]
+    report = top[available].copy()
+
+    for col in ["customer_profit", "expected_retention_value", "expected_net_benefit"]:
+        if col in report.columns:
+            report[col] = report[col].round(0)
+    if "churn_prob" in report.columns:
+        report["churn_prob"] = report["churn_prob"].round(2)
 
     print(f"\n  Top {top_n} Retention Targets:")
     print(report.to_string(index=False))
@@ -255,9 +270,9 @@ def generate_top_targets_report(df, top_n=20):
 
 def run(customer_data=None):
     """Run retention prioritization pipeline."""
-    print("\n" + "="*60)
-    print("PHASE 7: Retention Prioritization")
-    print("="*60)
+    print("\n" + "=" * 60)
+    print("PHASE 6: Retention Prioritization")
+    print("=" * 60)
 
     if customer_data is None:
         customer_data = pd.read_csv(
@@ -265,6 +280,10 @@ def run(customer_data=None):
         )
 
     df = customer_data.copy()
+
+    # Fill NaN profits (customers with cancelled orders only) with 0
+    if "customer_profit" in df.columns:
+        df["customer_profit"] = df["customer_profit"].fillna(0)
 
     # 1. Assign intervention costs
     print("\n  Assigning intervention costs...")
@@ -285,10 +304,10 @@ def run(customer_data=None):
     positive_roi = (df["expected_net_benefit"] > 0).sum()
 
     print(f"\n  Retention Economics Summary:")
-    print(f"    Total Expected Retention Value: {config.CURRENCY_SYMBOL}{total_erv:>12,.0f}")
-    print(f"    Total Intervention Budget:      {config.CURRENCY_SYMBOL}{total_cost:>12,.0f}")
-    print(f"    Total Expected Net Benefit:     {config.CURRENCY_SYMBOL}{total_benefit:>12,.0f}")
-    print(f"    Positive ROI customers:         {positive_roi:>6} ({positive_roi/len(df):.1%})")
+    print(f"    Total Expected Retention Value: {config.CURRENCY_SYMBOL} {total_erv:>12,.0f}")
+    print(f"    Total Intervention Budget:      {config.CURRENCY_SYMBOL} {total_cost:>12,.0f}")
+    print(f"    Total Expected Net Benefit:     {config.CURRENCY_SYMBOL} {total_benefit:>12,.0f}")
+    print(f"    Positive ROI customers:         {positive_roi:>6,} ({positive_roi / len(df):.1%})")
 
     # 5. Top targets
     top_report = generate_top_targets_report(df)
